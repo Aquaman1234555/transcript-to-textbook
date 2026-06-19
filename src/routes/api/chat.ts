@@ -58,7 +58,7 @@ export const Route = createFileRoute("/api/chat")({
         if (userMsg?.role === "user") {
           await supabase
             .from("chat_messages")
-            .insert({ video_id: video.id, role: "user", parts: userMsg.parts as unknown as object });
+            .insert({ video_id: video.id, role: "user", parts: userMsg.parts as any });
         }
 
         const result = streamText({
@@ -74,7 +74,7 @@ export const Route = createFileRoute("/api/chat")({
             if (last?.role === "assistant") {
               await supabase
                 .from("chat_messages")
-                .insert({ video_id: video.id, role: "assistant", parts: last.parts as unknown as object });
+                .insert({ video_id: video.id, role: "assistant", parts: last.parts as any });
             }
           },
         });
