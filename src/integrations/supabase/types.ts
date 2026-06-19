@@ -14,7 +14,144 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      chat_messages: {
+        Row: {
+          created_at: string
+          id: string
+          parts: Json
+          role: string
+          video_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          parts: Json
+          role: string
+          video_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          parts?: Json
+          role?: string
+          video_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chat_messages_video_id_fkey"
+            columns: ["video_id"]
+            isOneToOne: false
+            referencedRelation: "videos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      notes: {
+        Row: {
+          notes_markdown: string | null
+          obsidian_markdown: string | null
+          updated_at: string
+          video_id: string
+        }
+        Insert: {
+          notes_markdown?: string | null
+          obsidian_markdown?: string | null
+          updated_at?: string
+          video_id: string
+        }
+        Update: {
+          notes_markdown?: string | null
+          obsidian_markdown?: string | null
+          updated_at?: string
+          video_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notes_video_id_fkey"
+            columns: ["video_id"]
+            isOneToOne: true
+            referencedRelation: "videos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      transcripts: {
+        Row: {
+          clean_markdown: string | null
+          raw_segments: Json | null
+          raw_text: string | null
+          updated_at: string
+          video_id: string
+        }
+        Insert: {
+          clean_markdown?: string | null
+          raw_segments?: Json | null
+          raw_text?: string | null
+          updated_at?: string
+          video_id: string
+        }
+        Update: {
+          clean_markdown?: string | null
+          raw_segments?: Json | null
+          raw_text?: string | null
+          updated_at?: string
+          video_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transcripts_video_id_fkey"
+            columns: ["video_id"]
+            isOneToOne: true
+            referencedRelation: "videos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      videos: {
+        Row: {
+          channel: string | null
+          created_at: string
+          duration_seconds: number | null
+          error: string | null
+          id: string
+          status: string
+          thumbnail_url: string | null
+          title: string | null
+          updated_at: string
+          url: string
+          user_id: string
+          youtube_id: string
+        }
+        Insert: {
+          channel?: string | null
+          created_at?: string
+          duration_seconds?: number | null
+          error?: string | null
+          id?: string
+          status?: string
+          thumbnail_url?: string | null
+          title?: string | null
+          updated_at?: string
+          url: string
+          user_id: string
+          youtube_id: string
+        }
+        Update: {
+          channel?: string | null
+          created_at?: string
+          duration_seconds?: number | null
+          error?: string | null
+          id?: string
+          status?: string
+          thumbnail_url?: string | null
+          title?: string | null
+          updated_at?: string
+          url?: string
+          user_id?: string
+          youtube_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
