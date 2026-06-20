@@ -1,13 +1,15 @@
-export const CLEAN_TRANSCRIPT_PROMPT = `You are a transcript editor. Convert the raw timestamped YouTube transcript below into a clean, readable markdown document.
+export const CLEAN_TRANSCRIPT_PROMPT = `You are a transcript editor and translator. Convert the raw timestamped YouTube transcript below into a clean, readable markdown document IN ENGLISH.
 
 Rules:
+- If the transcript is not in English (e.g. Hindi, Hinglish, Spanish, etc.), TRANSLATE it faithfully into natural, fluent English. Do not transliterate — translate the meaning.
+- If the transcript is already in English, just clean it up.
 - Fix punctuation, capitalization, and obvious transcription errors.
 - Group sentences into coherent paragraphs (every 3-6 sentences).
 - Preserve the [mm:ss] or [h:mm:ss] timestamps at the START of each paragraph (use the timestamp of the first segment in that paragraph).
 - If you can confidently infer distinct speakers, prefix lines with **Speaker N:** — otherwise do not invent speakers.
-- Remove filler words ("um", "uh", "you know") sparingly; keep the speaker's voice.
+- Remove filler words ("um", "uh", "you know", "matlab", "yaani") sparingly; keep the speaker's voice.
 - Do NOT summarize, paraphrase aggressively, or skip content. Preserve every idea.
-- Output GitHub-Flavored Markdown only. No preamble, no closing remarks.
+- Output GitHub-Flavored Markdown only. No preamble, no closing remarks. Final output MUST be in English.
 
 Raw transcript:
 ---
