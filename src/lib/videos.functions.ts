@@ -167,7 +167,7 @@ export const generateForVideo = createServerFn({ method: "POST" })
       .eq("user_id", context.userId)
       .single();
     if (vErr || !video) throw new Error("Video not found");
-    if (video.status === "ready") return { ok: true, skipped: true };
+    await context.supabase.from("videos").update({ status: "pending", error: null }).eq("id", video.id);
 
     const { data: transcript } = await context.supabase
       .from("transcripts")

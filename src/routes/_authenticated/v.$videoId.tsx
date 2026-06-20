@@ -42,7 +42,7 @@ function VideoPage() {
   useEffect(() => {
     if (!data?.video) return;
     const hasNotes = !!data.notes?.notes_markdown;
-    if (data.video.status === "pending" && !hasNotes && !gen.isPending) {
+    if (!hasNotes && data.video.status !== "failed" && !gen.isPending) {
       gen.mutate();
     }
   }, [data, gen]);
