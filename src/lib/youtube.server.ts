@@ -139,11 +139,19 @@ export async function fetchTranscript(youtubeId: string): Promise<TranscriptSegm
     // Download the lowest quality audio stream to keep under 20MB inline limit
     const stream = ytdl(url, { filter: "audioonly", quality: "lowestaudio" });
     
-    const chunks: Buffer[] = [];
+    const chunks: Uint8Array[] = [];
+    let totalLength = 0;
     for await (const chunk of stream) {
-      chunks.push(Buffer.from(chunk));
+      const u8 = new Uint8Array(chunk as ArrayBufferLike);
+      chunks.push(u8);
+      totalLength += u8.length;
     }
-    const buffer = Buffer.concat(chunks);
+    const buffer = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      buffer.set(chunk, offset);
+      offset += chunk.length;
+    }
     
     const { text } = await generateText({
       model: google("gemini-2.5-flash"),
@@ -162,7 +170,7 @@ export async function fetchTranscript(youtubeId: string): Promise<TranscriptSegm
       const cleanJson = text.replace(/```json/g, "").replace(/```/g, "").trim();
       const parsed = JSON.parse(cleanJson);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.map((segment: any) => ({
+        return parsed.map((segment: Record<string, unknown>) => ({
           offset: Number(segment.offset) || 0,
           duration: Number(segment.duration) || 0,
           text: String(segment.text || "").trim(),
