@@ -127,25 +127,35 @@ export async function fetchTranscript(youtubeId: string): Promise<TranscriptSegm
     // We try GEMINI_API_KEY first, fallback to the explicitly provided key
     const apiKey = process.env.GEMINI_API_KEY || "AQ.Ab8RN6Jn50wP_FOgbGuCKamwqW13Kuv1X_-jDE-q4E1OlMox9Q";
 
-    const [ytdl, { generateText }, { createGoogleGenerativeAI }] = await Promise.all([
-      import("@distube/ytdl-core").then(m => m.default),
+    const [{ generateText }, { createGoogleGenerativeAI }, { Innertube }] = await Promise.all([
       import("ai"),
-      import("@ai-sdk/google")
+      import("@ai-sdk/google"),
+      import("youtubei.js")
     ]);
     
     const google = createGoogleGenerativeAI({ apiKey });
-    const url = `https://www.youtube.com/watch?v=${youtubeId}`;
+    const yt = await Innertube.create();
     
     // Download the lowest quality audio stream to keep under 20MB inline limit
-    const stream = ytdl(url, { filter: "audioonly", quality: "lowestaudio" });
+    const stream = await yt.download(youtubeId, {
+      type: "audio",
+      quality: "bestefficiency",
+      format: "mp4"
+    });
     
+    const reader = stream.getReader();
     const chunks: Uint8Array[] = [];
     let totalLength = 0;
-    for await (const chunk of stream) {
-      const u8 = new Uint8Array(chunk as ArrayBufferLike);
-      chunks.push(u8);
-      totalLength += u8.length;
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        totalLength += value.length;
+      }
     }
+    
     const buffer = new Uint8Array(totalLength);
     let offset = 0;
     for (const chunk of chunks) {
