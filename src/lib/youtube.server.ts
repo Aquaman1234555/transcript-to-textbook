@@ -43,7 +43,7 @@ export type TranscriptSegment = { offset: number; duration: number; text: string
 
 export async function fetchTranscript(youtubeId: string): Promise<TranscriptSegment[]> {
   const segments = await YoutubeTranscript.fetchTranscript(youtubeId);
-  return segments.map((s) => ({
+  return segments.map((s: { offset?: number; duration?: number; text?: string }) => ({
     offset: typeof s.offset === "number" ? s.offset : 0,
     duration: typeof s.duration === "number" ? s.duration : 0,
     text: (s.text ?? "").replace(/&amp;#39;/g, "'").replace(/&amp;/g, "&"),
