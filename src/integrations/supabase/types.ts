@@ -48,18 +48,27 @@ export type Database = {
       }
       notes: {
         Row: {
+          ap_analysis_markdown: string | null
+          concept_map_markdown: string | null
+          knowledge_expansion_markdown: string | null
           notes_markdown: string | null
           obsidian_markdown: string | null
           updated_at: string
           video_id: string
         }
         Insert: {
+          ap_analysis_markdown?: string | null
+          concept_map_markdown?: string | null
+          knowledge_expansion_markdown?: string | null
           notes_markdown?: string | null
           obsidian_markdown?: string | null
           updated_at?: string
           video_id: string
         }
         Update: {
+          ap_analysis_markdown?: string | null
+          concept_map_markdown?: string | null
+          knowledge_expansion_markdown?: string | null
           notes_markdown?: string | null
           obsidian_markdown?: string | null
           updated_at?: string
