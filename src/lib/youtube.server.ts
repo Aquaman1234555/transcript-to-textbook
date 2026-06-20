@@ -111,89 +111,14 @@ export async function fetchTranscript(youtubeId: string): Promise<TranscriptSegm
   } catch {
     // fall through to legacy lib
   }
-
-  try {
-    // Fallback: legacy library (helps for some edge cases).
-    const segments = await YoutubeTranscript.fetchTranscript(youtubeId);
-    return segments.map((s: { offset?: number; duration?: number; text?: string }) => ({
-      offset: typeof s.offset === "number" ? s.offset : 0,
-      duration: typeof s.duration === "number" ? s.duration : 0,
-      text: decodeHtml(s.text ?? ""),
-    }));
-  } catch (error) {
-    // Universal STT Fallback
-    console.log(`Failed to fetch YouTube transcript for ${youtubeId}. Falling back to AI audio transcription using Gemini...`);
-    
-    // We try GEMINI_API_KEY first, fallback to the explicitly provided key
-    const apiKey = process.env.GEMINI_API_KEY || "AQ.Ab8RN6Jn50wP_FOgbGuCKamwqW13Kuv1X_-jDE-q4E1OlMox9Q";
-
-    const [{ generateText }, { createGoogleGenerativeAI }, { Innertube }] = await Promise.all([
-      import("ai"),
-      import("@ai-sdk/google"),
-      import("youtubei.js")
-    ]);
-    
-    const google = createGoogleGenerativeAI({ apiKey });
-    const yt = await Innertube.create();
-    
-    // Download the lowest quality audio stream to keep under 20MB inline limit
-    const stream = await yt.download(youtubeId, {
-      type: "audio",
-      quality: "bestefficiency",
-      format: "mp4"
-    });
-    
-    const reader = stream.getReader();
-    const chunks: Uint8Array[] = [];
-    let totalLength = 0;
-    
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        chunks.push(value);
-        totalLength += value.length;
-      }
-    }
-    
-    const buffer = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      buffer.set(chunk, offset);
-      offset += chunk.length;
-    }
-    
-    const { text } = await generateText({
-      model: google("gemini-2.5-flash"),
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Please transcribe this audio accurately. Output ONLY a valid JSON array of objects with keys 'offset' (start time in seconds, number), 'duration' (length in seconds, number), and 'text' (string). Do not wrap in markdown code blocks, just raw JSON." },
-            { type: "file", data: buffer, mimeType: "audio/mp4" }
-          ]
-        }
-      ]
-    });
-    
-    try {
-      const cleanJson = text.replace(/```json/g, "").replace(/```/g, "").trim();
-      const parsed = JSON.parse(cleanJson);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.map((segment: Record<string, unknown>) => ({
-          offset: Number(segment.offset) || 0,
-          duration: Number(segment.duration) || 0,
-          text: String(segment.text || "").trim(),
-        }));
-      }
-    } catch (e) {
-      console.error("Failed to parse Gemini transcription JSON", text);
-    }
-    
-    throw new Error("Audio transcription returned invalid format.");
-  }
+  // Fallback: legacy library (helps for some edge cases).
+  const segments = await YoutubeTranscript.fetchTranscript(youtubeId);
+  return segments.map((s: { offset?: number; duration?: number; text?: string }) => ({
+    offset: typeof s.offset === "number" ? s.offset : 0,
+    duration: typeof s.duration === "number" ? s.duration : 0,
+    text: decodeHtml(s.text ?? ""),
+  }));
 }
-
 
 export function formatTimestamp(seconds: number): string {
   const total = Math.floor(seconds);
