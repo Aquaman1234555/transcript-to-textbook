@@ -107,12 +107,7 @@ function VideoPage() {
                 <ExternalLink className="size-3.5" /> Watch on YouTube
               </a>
             </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => gen.mutate()}
-              disabled={gen.isPending}
-            >
+            <Button size="sm" variant="ghost" onClick={() => gen.mutate()} disabled={gen.isPending}>
               {gen.isPending ? (
                 <Loader2 className="size-3.5 animate-spin" />
               ) : (
@@ -135,9 +130,11 @@ function VideoPage() {
       </div>
 
       <Tabs defaultValue="notes" className="flex flex-col">
-        <TabsList className="self-start">
-          <TabsTrigger value="notes">Notes</TabsTrigger>
-          <TabsTrigger value="obsidian">Obsidian</TabsTrigger>
+        <TabsList className="flex-wrap self-start">
+          <TabsTrigger value="notes">Textbook Notes</TabsTrigger>
+          <TabsTrigger value="concept">Concept Map</TabsTrigger>
+          <TabsTrigger value="ap">AP Analysis</TabsTrigger>
+          <TabsTrigger value="expansion">Knowledge Expansion</TabsTrigger>
           <TabsTrigger value="clean">Clean transcript</TabsTrigger>
           <TabsTrigger value="raw">Raw transcript</TabsTrigger>
           <TabsTrigger value="chat">Chat</TabsTrigger>
@@ -155,13 +152,37 @@ function VideoPage() {
             <Empty isGenerating={isGenerating} />
           )}
         </TabsContent>
-        <TabsContent value="obsidian" className="mt-4 min-h-[70vh]">
-          {notes?.obsidian_markdown ? (
+        <TabsContent value="concept" className="mt-4 min-h-[70vh]">
+          {notes?.concept_map_markdown ? (
             <MarkdownEditor
               videoId={videoId}
-              kind="obsidian"
-              initial={notes.obsidian_markdown}
-              filename={`${slug(video.title)}.md`}
+              kind="concept_map"
+              initial={notes.concept_map_markdown}
+              filename={`${slug(video.title)}-concept-map.md`}
+            />
+          ) : (
+            <Empty isGenerating={isGenerating} />
+          )}
+        </TabsContent>
+        <TabsContent value="ap" className="mt-4 min-h-[70vh]">
+          {notes?.ap_analysis_markdown ? (
+            <MarkdownEditor
+              videoId={videoId}
+              kind="ap_analysis"
+              initial={notes.ap_analysis_markdown}
+              filename={`${slug(video.title)}-ap-analysis.md`}
+            />
+          ) : (
+            <Empty isGenerating={isGenerating} />
+          )}
+        </TabsContent>
+        <TabsContent value="expansion" className="mt-4 min-h-[70vh]">
+          {notes?.knowledge_expansion_markdown ? (
+            <MarkdownEditor
+              videoId={videoId}
+              kind="knowledge_expansion"
+              initial={notes.knowledge_expansion_markdown}
+              filename={`${slug(video.title)}-knowledge-expansion.md`}
             />
           ) : (
             <Empty isGenerating={isGenerating} />

@@ -1,22 +1,38 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import type { TablesUpdate } from "@/integrations/supabase/types";
 import { z } from "zod";
 
 const UrlInput = z.object({ url: z.string().min(1).max(500) });
 const VideoIdInput = z.object({ videoId: z.string().uuid() });
+const NOTE_KINDS = [
+  "notes",
+  "obsidian",
+  "concept_map",
+  "ap_analysis",
+  "knowledge_expansion",
+] as const;
+
 const SaveInput = z.object({
   videoId: z.string().uuid(),
-  kind: z.enum(["notes", "obsidian", "clean"]),
+  kind: z.enum(["notes", "obsidian", "concept_map", "ap_analysis", "knowledge_expansion", "clean"]),
   content: z.string().max(500_000),
 });
+
+const NOTE_KIND_COLUMN = {
+  notes: "notes_markdown",
+  obsidian: "obsidian_markdown",
+  concept_map: "concept_map_markdown",
+  ap_analysis: "ap_analysis_markdown",
+  knowledge_expansion: "knowledge_expansion_markdown",
+} as const satisfies Record<(typeof NOTE_KINDS)[number], keyof TablesUpdate<"notes">>;
 
 export const ingestVideo = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => UrlInput.parse(d))
   .handler(async ({ data, context }) => {
-    const { extractYoutubeId, fetchOEmbed, fetchTranscript, segmentsToRawText } = await import(
-      "./youtube.server"
-    );
+    const { extractYoutubeId, fetchOEmbed, fetchTranscript, segmentsToRawText } =
+      await import("./youtube.server");
     const youtubeId = extractYoutubeId(data.url);
     if (!youtubeId) throw new Error("That doesn't look like a YouTube URL.");
 
@@ -103,7 +119,9 @@ export const getVideo = createServerFn({ method: "POST" })
       .maybeSingle();
     const { data: notes } = await context.supabase
       .from("notes")
-      .select("notes_markdown, obsidian_markdown, updated_at")
+      .select(
+        "notes_markdown, obsidian_markdown, concept_map_markdown, ap_analysis_markdown, knowledge_expansion_markdown, updated_at",
+      )
       .eq("video_id", video.id)
       .maybeSingle();
 
@@ -134,10 +152,7 @@ export const saveContent = createServerFn({ method: "POST" })
         .eq("video_id", data.videoId);
       if (error) throw new Error(error.message);
     } else {
-      const patch =
-        data.kind === "notes"
-          ? { notes_markdown: data.content }
-          : { obsidian_markdown: data.content };
+      const patch: TablesUpdate<"notes"> = { [NOTE_KIND_COLUMN[data.kind]]: data.content };
       const { error } = await context.supabase
         .from("notes")
         .update(patch)
@@ -151,14 +166,17 @@ export const generateForVideo = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => VideoIdInput.parse(d))
   .handler(async ({ data, context }) => {
-    const { generateText } = await import("ai");
-    const { createLovableAiGatewayProvider } = await import("./ai-gateway.server");
-    const { CLEAN_TRANSCRIPT_PROMPT, NOTES_PROMPT, OBSIDIAN_PROMPT } = await import(
-      "./prompts.server"
-    );
+    const { createLayerGenerator } = await import("./models.server");
+    const {
+      CLEAN_TRANSCRIPT_PROMPT,
+      NOTES_PROMPT,
+      CONCEPT_MAP_PROMPT,
+      AP_ANALYSIS_PROMPT,
+      KNOWLEDGE_EXPANSION_PROMPT,
+    } = await import("./prompts.server");
+    const { AP_FRAMEWORK_KNOWLEDGE } = await import("./ap-framework.server");
 
-    const key = process.env.LOVABLE_API_KEY;
-    if (!key) throw new Error("Missing LOVABLE_API_KEY");
+    const ai = await createLayerGenerator();
 
     const { data: video, error: vErr } = await context.supabase
       .from("videos")
@@ -167,7 +185,10 @@ export const generateForVideo = createServerFn({ method: "POST" })
       .eq("user_id", context.userId)
       .single();
     if (vErr || !video) throw new Error("Video not found");
-    await context.supabase.from("videos").update({ status: "pending", error: null }).eq("id", video.id);
+    await context.supabase
+      .from("videos")
+      .update({ status: "pending", error: null })
+      .eq("id", video.id);
 
     const { data: transcript } = await context.supabase
       .from("transcripts")
@@ -176,43 +197,45 @@ export const generateForVideo = createServerFn({ method: "POST" })
       .single();
     if (!transcript?.raw_text) throw new Error("No transcript to process");
 
-    // cap to ~120k chars to stay within model limits
-    const rawCapped = transcript.raw_text.slice(0, 120_000);
-
-    const gateway = createLovableAiGatewayProvider(key);
-    const fastModel = gateway("google/gemini-3-flash-preview");
-    const deepModel = gateway("google/gemini-2.5-pro");
+    // Gemini has a very large context window, so we can feed long transcripts.
+    const rawCapped = transcript.raw_text.slice(0, 500_000);
 
     try {
-      // 1. clean transcript
-      const cleanRes = await generateText({
-        model: fastModel,
-        prompt: CLEAN_TRANSCRIPT_PROMPT.replace("{TRANSCRIPT}", rawCapped),
-      });
-      const cleanMd = cleanRes.text;
+      // Layer 1: clean transcript.
+      const cleanMd = await ai.fast(CLEAN_TRANSCRIPT_PROMPT.replace("{TRANSCRIPT}", rawCapped));
       await context.supabase
         .from("transcripts")
         .update({ clean_markdown: cleanMd })
         .eq("video_id", video.id);
 
-      // 2. detailed notes (uses clean transcript if shorter)
-      const notesSource = cleanMd.length < rawCapped.length ? cleanMd : rawCapped;
-      const notesRes = await generateText({
-        model: deepModel,
-        prompt: NOTES_PROMPT.replace("{TRANSCRIPT}", notesSource),
-      });
-      const notesMd = notesRes.text;
-
-      // 3. obsidian variant
-      const obsRes = await generateText({
-        model: fastModel,
-        prompt: OBSIDIAN_PROMPT.replace("{NOTES}", notesMd),
-      });
-      const obsidianMd = obsRes.text;
+      // Layer 2: detailed academic notes (prefer the clean transcript).
+      const notesSource = cleanMd.length > 0 ? cleanMd : rawCapped;
+      const notesMd = await ai.deep(NOTES_PROMPT.replace("{TRANSCRIPT}", notesSource));
 
       await context.supabase
         .from("notes")
-        .update({ notes_markdown: notesMd, obsidian_markdown: obsidianMd })
+        .update({ notes_markdown: notesMd })
+        .eq("video_id", video.id);
+
+      // Layers 3-5 derive from the notes and are independent of each other.
+      const [conceptMap, apAnalysis, knowledgeExpansion] = await Promise.all([
+        ai.fast(CONCEPT_MAP_PROMPT.replace("{NOTES}", notesMd)),
+        ai.deep(
+          AP_ANALYSIS_PROMPT.replace("{FRAMEWORK}", AP_FRAMEWORK_KNOWLEDGE).replace(
+            "{NOTES}",
+            notesMd,
+          ),
+        ),
+        ai.fast(KNOWLEDGE_EXPANSION_PROMPT.replace("{NOTES}", notesMd)),
+      ]);
+
+      await context.supabase
+        .from("notes")
+        .update({
+          concept_map_markdown: conceptMap,
+          ap_analysis_markdown: apAnalysis,
+          knowledge_expansion_markdown: knowledgeExpansion,
+        })
         .eq("video_id", video.id);
 
       await context.supabase

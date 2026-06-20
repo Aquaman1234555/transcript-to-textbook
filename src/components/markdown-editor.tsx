@@ -8,7 +8,7 @@ import { saveContent } from "@/lib/videos.functions";
 import { Loader2, Download, Check } from "lucide-react";
 import { toast } from "sonner";
 
-type Kind = "notes" | "obsidian" | "clean";
+type Kind = "notes" | "obsidian" | "concept_map" | "ap_analysis" | "knowledge_expansion" | "clean";
 
 export function MarkdownEditor({
   videoId,
