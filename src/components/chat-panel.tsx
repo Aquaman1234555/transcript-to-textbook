@@ -8,13 +8,21 @@ import { MarkdownView } from "./markdown-view";
 import { Send, Loader2, Sparkles } from "lucide-react";
 
 const SUGGESTIONS = [
-  "Explain this video in simpler language.",
+  "Explain this like a teacher, then like I'm a beginner.",
+  "Challenge the speaker's main argument.",
+  "What hidden assumptions is the speaker making?",
   "Create 10 flashcards from this video.",
   "Generate 5 multiple-choice questions with answers.",
   "Create a 1-page revision sheet.",
 ];
 
-export function ChatPanel({ videoId, initialMessages }: { videoId: string; initialMessages: UIMessage[] }) {
+export function ChatPanel({
+  videoId,
+  initialMessages,
+}: {
+  videoId: string;
+  initialMessages: UIMessage[];
+}) {
   const [input, setInput] = useState("");
   const [token, setToken] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);

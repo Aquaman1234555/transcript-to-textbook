@@ -102,8 +102,9 @@ function HomePage() {
             <span className="text-primary">Get a study guide.</span>
           </h1>
           <p className="mx-auto max-w-xl text-pretty text-base text-muted-foreground">
-            Scriba turns long videos into clean transcripts, deep AI notes, and Obsidian-ready
-            markdown — then lets you ask the video questions.
+            Scriba turns long videos into clean transcripts, deep AI notes, concept maps, and a
+            framework-driven analysis of the assumptions and ideas beneath them — then lets you ask
+            the video anything.
           </p>
         </div>
 
@@ -127,10 +128,14 @@ function HomePage() {
 
         <div className="mt-20 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {[
-            { icon: FileText, title: "Clean transcript", desc: "Punctuation, paragraphs, speakers." },
-            { icon: Sparkles, title: "Detailed notes", desc: "Textbook depth, not a summary." },
-            { icon: Boxes, title: "Obsidian export", desc: "Tags, wikilinks, callouts, mermaid." },
-            { icon: MessageSquare, title: "Chat with video", desc: "Quizzes, flashcards, deep dives." },
+            { icon: FileText, title: "Textbook notes", desc: "Textbook depth, not a summary." },
+            { icon: Boxes, title: "Concept maps", desc: "Mermaid diagrams of how ideas connect." },
+            { icon: Sparkles, title: "AP Analysis", desc: "Assumptions, motives, deeper layers." },
+            {
+              icon: MessageSquare,
+              title: "Ask anything",
+              desc: "Quizzes, flashcards, deep dives.",
+            },
           ].map((f) => (
             <div key={f.title} className="rounded-xl border bg-card p-4">
               <f.icon className="size-5 text-primary" />

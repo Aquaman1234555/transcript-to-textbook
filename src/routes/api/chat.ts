@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { convertToModelMessages, streamText, type UIMessage } from "ai";
 import { createClient } from "@supabase/supabase-js";
-import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
+import { getAiModels } from "@/lib/models.server";
 import { chatSystemPrompt } from "@/lib/prompts.server";
 import type { Database } from "@/integrations/supabase/types";
 
@@ -39,19 +39,34 @@ export const Route = createFileRoute("/api/chat")({
         if (!video) return new Response("Not found", { status: 404 });
 
         const [{ data: t }, { data: n }] = await Promise.all([
-          supabase.from("transcripts").select("clean_markdown, raw_text").eq("video_id", video.id).single(),
-          supabase.from("notes").select("notes_markdown").eq("video_id", video.id).single(),
+          supabase
+            .from("transcripts")
+            .select("clean_markdown, raw_text")
+            .eq("video_id", video.id)
+            .single(),
+          supabase
+            .from("notes")
+            .select("notes_markdown, ap_analysis_markdown")
+            .eq("video_id", video.id)
+            .single(),
         ]);
 
-        const key = process.env.LOVABLE_API_KEY;
-        if (!key) return new Response("Missing LOVABLE_API_KEY", { status: 500 });
+        let model;
+        try {
+          ({ fast: model } = await getAiModels());
+        } catch (e) {
+          return new Response(e instanceof Error ? e.message : "No AI provider", { status: 500 });
+        }
 
-        const gateway = createLovableAiGatewayProvider(key);
-        const model = gateway("google/gemini-3-flash-preview");
-
-        const transcriptText = (t?.clean_markdown || t?.raw_text || "").slice(0, 100_000);
-        const notesText = (n?.notes_markdown || "").slice(0, 60_000);
-        const system = chatSystemPrompt(video.title ?? "Untitled", transcriptText, notesText);
+        const transcriptText = (t?.clean_markdown || t?.raw_text || "").slice(0, 200_000);
+        const notesText = (n?.notes_markdown || "").slice(0, 80_000);
+        const apText = (n?.ap_analysis_markdown || "").slice(0, 40_000);
+        const system = chatSystemPrompt(
+          video.title ?? "Untitled",
+          transcriptText,
+          notesText,
+          apText,
+        );
 
         const messages = body.messages;
         const userMsg = messages[messages.length - 1];
