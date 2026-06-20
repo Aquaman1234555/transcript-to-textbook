@@ -17,6 +17,19 @@ export const Route = createFileRoute("/")({
         content:
           "Paste any YouTube URL and get a clean transcript, detailed AI study notes, Obsidian export, and a tutor that knows the video.",
       },
+      { property: "og:title", content: "Scriba — Turn YouTube lectures into study notes" },
+      {
+        property: "og:description",
+        content:
+          "Paste any YouTube URL and get a clean transcript, detailed AI study notes, Obsidian export, and a tutor that knows the video.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: "Scriba — Turn YouTube lectures into study notes" },
+      {
+        name: "twitter:description",
+        content: "Detailed AI study notes from any YouTube video, with Obsidian export and chat.",
+      },
     ],
   }),
   component: HomePage,
