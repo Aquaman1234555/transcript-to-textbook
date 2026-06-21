@@ -112,12 +112,152 @@ export async function fetchTranscript(youtubeId: string): Promise<TranscriptSegm
     // fall through to legacy lib
   }
   // Fallback: legacy library (helps for some edge cases).
-  const segments = await YoutubeTranscript.fetchTranscript(youtubeId);
-  return segments.map((s: { offset?: number; duration?: number; text?: string }) => ({
-    offset: typeof s.offset === "number" ? s.offset : 0,
-    duration: typeof s.duration === "number" ? s.duration : 0,
-    text: decodeHtml(s.text ?? ""),
-  }));
+  try {
+    const segments = await YoutubeTranscript.fetchTranscript(youtubeId);
+    return segments.map((s: { offset?: number; duration?: number; text?: string }) => ({
+      offset: typeof s.offset === "number" ? s.offset : 0,
+      duration: typeof s.duration === "number" ? s.duration : 0,
+      text: decodeHtml(s.text ?? ""),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// ============================================================================
+// Audio transcription fallback (for videos without captions)
+// ============================================================================
+
+type AdaptiveFormat = {
+  itag?: number;
+  url?: string;
+  mimeType?: string;
+  bitrate?: number;
+  averageBitrate?: number;
+  contentLength?: string;
+  approxDurationMs?: string;
+};
+
+type PlayerResponse = {
+  streamingData?: { adaptiveFormats?: AdaptiveFormat[]; formats?: AdaptiveFormat[] };
+  videoDetails?: { lengthSeconds?: string; isLiveContent?: boolean };
+};
+
+async function fetchPlayerResponse(youtubeId: string): Promise<PlayerResponse | null> {
+  const r = await fetch(`https://www.youtube.com/watch?v=${youtubeId}&hl=en`, {
+    headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9" },
+  });
+  if (!r.ok) return null;
+  const html = await r.text();
+  const m = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;\s*(?:var\s|<\/script>)/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[1]) as PlayerResponse;
+  } catch {
+    return null;
+  }
+}
+
+export type AudioStream = {
+  url: string;
+  mime: string;
+  contentLength: number;
+  durationSeconds: number;
+};
+
+const MAX_AUDIO_BYTES = 24 * 1024 * 1024;
+const MAX_DURATION_SECONDS = 60 * 60;
+
+export async function resolveAudioStream(youtubeId: string): Promise<AudioStream> {
+  const pr = await fetchPlayerResponse(youtubeId);
+  if (!pr) throw new Error("ACCESS_DENIED");
+  if (pr.videoDetails?.isLiveContent) throw new Error("LIVE_STREAM");
+
+  const duration = Number(pr.videoDetails?.lengthSeconds ?? "0");
+  if (duration > MAX_DURATION_SECONDS) throw new Error("TOO_LONG");
+
+  const formats = pr.streamingData?.adaptiveFormats ?? [];
+  const audios = formats
+    .filter((f) => f.mimeType?.startsWith("audio/") && f.url)
+    .sort((a, b) => (a.averageBitrate ?? a.bitrate ?? 0) - (b.averageBitrate ?? b.bitrate ?? 0));
+
+  if (!audios.length) throw new Error("NO_AUDIO_STREAM");
+  const picked = audios[0];
+  const contentLength = Number(picked.contentLength ?? "0");
+  if (contentLength > MAX_AUDIO_BYTES) throw new Error("AUDIO_TOO_LARGE");
+
+  return {
+    url: picked.url!,
+    mime: (picked.mimeType ?? "audio/mp4").split(";")[0].trim(),
+    contentLength,
+    durationSeconds: duration,
+  };
+}
+
+export async function fetchAudioBlob(stream: AudioStream): Promise<Blob> {
+  const r = await fetch(stream.url, { headers: { "User-Agent": UA } });
+  if (!r.ok) throw new Error("AUDIO_FETCH_FAILED");
+  const buf = await r.arrayBuffer();
+  if (buf.byteLength > MAX_AUDIO_BYTES) throw new Error("AUDIO_TOO_LARGE");
+  return new Blob([buf], { type: stream.mime });
+}
+
+function extensionForMime(mime: string): string {
+  if (mime.includes("webm")) return "webm";
+  if (mime.includes("mp4") || mime.includes("m4a")) return "m4a";
+  if (mime.includes("mpeg")) return "mp3";
+  if (mime.includes("wav")) return "wav";
+  return "m4a";
+}
+
+export async function transcribeAudio(
+  blob: Blob,
+  mime: string,
+  lovableApiKey: string,
+): Promise<string> {
+  const form = new FormData();
+  form.append("model", "openai/gpt-4o-mini-transcribe");
+  form.append("file", blob, `audio.${extensionForMime(mime)}`);
+  const r = await fetch("https://ai.gateway.lovable.dev/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${lovableApiKey}` },
+    body: form,
+  });
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    if (r.status === 402) throw new Error("AI_CREDITS_EXHAUSTED");
+    if (r.status === 429) throw new Error("AI_RATE_LIMITED");
+    throw new Error(`TRANSCRIBE_FAILED:${r.status}:${body.slice(0, 200)}`);
+  }
+  const data = (await r.json()) as { text?: string };
+  return (data.text ?? "").trim();
+}
+
+export function textToSyntheticSegments(
+  text: string,
+  totalDurationSeconds: number,
+): TranscriptSegment[] {
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!sentences.length) return [];
+
+  const bucketSeconds = 30;
+  const numBuckets = Math.max(1, Math.ceil(totalDurationSeconds / bucketSeconds));
+  const perBucket = Math.max(1, Math.ceil(sentences.length / numBuckets));
+
+  const segments: TranscriptSegment[] = [];
+  for (let i = 0; i < sentences.length; i += perBucket) {
+    const chunk = sentences.slice(i, i + perBucket).join(" ");
+    const bucketIdx = Math.floor(i / perBucket);
+    segments.push({
+      offset: bucketIdx * bucketSeconds,
+      duration: bucketSeconds,
+      text: chunk,
+    });
+  }
+  return segments;
 }
 
 export function formatTimestamp(seconds: number): string {

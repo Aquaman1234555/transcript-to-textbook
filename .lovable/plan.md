@@ -1,76 +1,75 @@
-# YouTube Learning Notes — v1 Plan
+## Goal
 
-Stack: TanStack Start + Lovable Cloud (Postgres/auth) + Lovable AI Gateway (Gemini). Transcripts via free YouTube captions only.
+When a YouTube video has no captions, automatically download its audio and transcribe it with Lovable AI, then feed the transcript into the existing notes pipeline. Captions stay the fast path.
 
-## Scope
+## Flow (per ingest)
 
-In: URL input → metadata → raw + cleaned transcript → detailed AI notes → markdown editor with auto-save → Obsidian-formatted export (.md) → chat Q&A over transcript/notes → per-user history.
+```text
+User pastes URL
+   │
+   ▼
+Extract YouTube ID  →  fetch oEmbed (title/thumb)
+   │
+   ▼
+Try captions (existing scraper + youtube-transcript)
+   │
+   ├── found  ─────────────────────────────► use as transcript (current behavior)
+   │
+   └── none / disabled
+            │
+            ▼
+       Resolve a direct audio stream URL for the video
+            │
+            ▼
+       Stream audio bytes  →  size + duration guard (≤ 60 min, ≤ 24 MiB)
+            │
+            ▼
+       POST multipart to Lovable AI /v1/audio/transcriptions
+       model: openai/gpt-4o-mini-transcribe  (non-streaming, JSON)
+            │
+            ▼
+       Build synthetic [mm:ss] segments from the returned text
+            │
+            ▼
+       Insert into `transcripts` exactly like a caption transcript
+            │
+            ▼
+       Existing generate pipeline (clean → notes → concept map / AP / KE)
+```
 
-Out (v2): Whisper fallback, PDF/DOCX export, Obsidian vault zip, per-section regenerate, flashcards/MCQ presets (chat can still do these on demand).
+## What changes
 
-## User flow
+### 1. `src/lib/youtube.server.ts`
+- Keep `fetchTranscript` as the captions path.
+- Add `resolveAudioStreamUrl(youtubeId)`: parse the watch page's `ytInitialPlayerResponse` (already fetched for caption tracks) to read `streamingData.adaptiveFormats`. Pick the smallest audio-only format (lowest bitrate `audio/mp4` or `audio/webm`) so a 1-hour video fits under the Gateway 25 MiB cap.
+- Add `fetchAudioBlob(url, { maxBytes })`: `fetch()` the URL, abort if `Content-Length` exceeds `maxBytes`, return `{ blob, mime }`.
+- Export `transcribeAudioWithLovableAI(blob, mime, lovableApiKey)`: multipart POST to `https://ai.gateway.lovable.dev/v1/audio/transcriptions` with `model=openai/gpt-4o-mini-transcribe`. Filename extension derived from MIME (`.m4a`/`.webm`/`.mp3`). Returns the full text plus `usage`.
+- Export `textToSyntheticSegments(text)`: split by sentence/length into ~30 s buckets and emit `{ offset, duration, text }` so the existing `segmentsToRawText` + `[mm:ss]` formatting still works downstream.
 
-1. Sign in (email/password + Google).
-2. Home: paste YouTube URL → server fetches oEmbed metadata (title, channel, thumbnail) + captions.
-3. Show video card + 3 tabs while processing: **Raw transcript**, **Clean transcript**, **Notes**. Each streams in.
-4. Library sidebar lists prior videos. Click → opens detail page.
-5. Detail page (`/v/$videoId`): tabs for Raw / Clean / Notes / Obsidian / Chat. Notes + Clean tabs are editable (markdown editor, debounced auto-save). Export button downloads `.md`.
+### 2. `src/lib/videos.functions.ts` — `ingestVideo`
+Replace the current "no captions → throw" branch with:
 
-## Pages / routes
+1. Try captions; on success continue.
+2. Else call `resolveAudioStreamUrl` → `fetchAudioBlob` (cap 24 MiB) → `transcribeAudioWithLovableAI` using `process.env.LOVABLE_API_KEY`.
+3. Convert the returned text into synthetic segments and persist into `transcripts.raw_segments` / `raw_text` exactly as today.
+4. Only throw a user-facing error if BOTH paths fail. Error messages:
+   - "Audio is too long for transcription (over ~60 min). Try a shorter video."
+   - "Couldn't access this video's audio (it may be private, members-only, or age-restricted)."
+   - "Audio transcription failed. Please try again."
 
-- `/` — landing + URL input (signed-out shows sign-in CTA).
-- `/auth` — managed sign-in.
-- `/_authenticated/library` — list of videos.
-- `/_authenticated/v/$videoId` — tabs + editor + chat panel.
+### 3. UI copy
+`src/routes/_authenticated/library.tsx` and `v.$videoId.tsx`: pending toast/state already covers this; just soften the existing "Couldn't fetch captions" copy to "Fetching transcript… (audio transcription may take a minute for longer videos)".
 
-## Data model (Lovable Cloud)
+No DB migration. No new dependencies. No new secrets — `LOVABLE_API_KEY` is already provisioned.
 
-- `videos`: id, user_id, youtube_id, url, title, channel, thumbnail_url, duration_seconds, status (`pending|ready|failed`), error, created_at.
-- `transcripts`: video_id PK, raw_text, raw_segments (jsonb: [{start,end,text}]), clean_markdown.
-- `notes`: video_id PK, notes_markdown, obsidian_markdown, updated_at.
-- `chat_messages`: id, video_id, role, parts (jsonb), created_at.
+## Limits & trade-offs (so you know up front)
 
-RLS: all tables scoped to `auth.uid() = user_id` (videos), or via `video_id → videos.user_id` for the rest. Standard grants for `authenticated` + `service_role`.
+- **Length cap ~60 min**: enforced by the Lovable AI Gateway's 25 MiB request body. We pick the lowest-bitrate audio track YouTube offers, which keeps a typical 60 min video under that cap, but a very long or very high-bitrate stream can still trip it — we'll surface a clear "too long" error rather than silently truncate.
+- **Audio-transcribed videos have approximate timestamps**: captions give per-line timing; STT gives one block of text. We synthesize evenly-spaced `[mm:ss]` markers (~30 s buckets) so the notes still feel timestamped, but they're estimates, not exact.
+- **Cost**: audio transcription uses Lovable AI credits proportional to audio length. A 1 hr video is meaningfully more expensive than the caption path. The Hindi→English translation you already added still happens in the clean-transcript step, so non-English audio is auto-translated.
+- **What still won't work**: private / members-only / age-restricted / region-blocked videos (no public audio stream) and live streams. We'll error out with a clear message instead of producing garbage.
 
-## Server functions (`src/lib/*.functions.ts`)
+## Out of scope
 
-- `ingestVideo({ url })` — auth-gated. Parses youtube id, fetches oEmbed, fetches captions (`youtube-transcript` npm package), inserts `videos` row + raw transcript, kicks off `generateForVideo`.
-- `generateForVideo({ videoId })` — auth-gated. Streams two Gemini calls sequentially using `streamText`/`generateText`:
-  1. Clean transcript (fix punctuation, paragraphs, speaker labels when inferable, preserve `[mm:ss]` markers).
-  2. Detailed notes (long-form, structured per spec: Overview, Key Concepts, Detailed Breakdown, Terminology table, Examples, Relationships, Takeaways, Reflection Questions, Further Research). System prompt enforces depth ("textbook-chapter quality, not a summary").
-  3. Obsidian variant (post-pass: add `#tags`, `[[wikilinks]]`, callouts, optional mermaid concept map).
-  Saves all three to DB.
-- `saveNotes({ videoId, notes_markdown })`, `saveCleanTranscript(...)` — debounced auto-save from editor.
-- `listVideos()`, `getVideo({ videoId })` — library + detail loaders.
-- `deleteVideo({ videoId })`.
-
-## Server route
-
-- `src/routes/api/chat.ts` — AI SDK streaming chat. POST body includes `videoId` + `messages`. Handler verifies bearer (`requireSupabaseAuth`-equivalent inside handler), loads transcript + notes for that video as system context, streams Gemini reply, persists user + assistant messages in `onFinish`.
-
-## Models
-
-Default `google/gemini-3-flash-preview` for clean transcript, chat, and Obsidian pass. Use `google/gemini-2.5-pro` for the detailed-notes pass (depth matters; long context for 2h videos). Gracefully surface 402/429.
-
-## Frontend details
-
-- Editor: `@uiw/react-md-editor` (or textarea + `react-markdown` preview) — simple, no heavy WYSIWYG. Debounced 1s auto-save via server fn.
-- Markdown render: `react-markdown` + `remark-gfm` for tables; `mermaid` for Obsidian mermaid blocks.
-- Chat: AI Elements composition per chat-ui-composition; one conversation per video (no separate thread list); messages persisted in DB and restored on load.
-- Export: client builds Blob from `obsidian_markdown` → download as `{title}.md`.
-- Design: dark default with light toggle; minimal Obsidian/Linear-inspired; sidebar with library list; reading-width content column.
-
-## Dependencies to add
-
-`youtube-transcript`, `ai`, `@ai-sdk/openai-compatible`, `@ai-sdk/react`, `react-markdown`, `remark-gfm`, `@uiw/react-md-editor`, `mermaid`, `zod` (already present likely).
-
-## Security / guardrails
-
-- Validate URL with zod, extract 11-char video id, reject non-YouTube.
-- Cap transcript size sent to model (chunk + map-reduce if > ~150k tokens; v1: hard cap with warning).
-- Surface caption-unavailable error cleanly ("This video has no captions; Whisper fallback is on the roadmap").
-- No service-role usage in app code paths; all reads/writes via authenticated client and RLS.
-
-## Out of scope reminder
-
-PDF/DOCX export, per-section regenerate, flashcards/MCQ buttons, Obsidian vault zip, Whisper fallback — defer to v2.
+- Chunked transcription of >60 min videos (would need ffmpeg.wasm in the Worker).
+- Background job queue / progress bar for long transcriptions — runs inline in the existing ingest server function.

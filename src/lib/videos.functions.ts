@@ -31,12 +31,19 @@ export const ingestVideo = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => UrlInput.parse(d))
   .handler(async ({ data, context }) => {
-    const { extractYoutubeId, fetchOEmbed, fetchTranscript, segmentsToRawText } =
-      await import("./youtube.server");
+    const {
+      extractYoutubeId,
+      fetchOEmbed,
+      fetchTranscript,
+      segmentsToRawText,
+      resolveAudioStream,
+      fetchAudioBlob,
+      transcribeAudio,
+      textToSyntheticSegments,
+    } = await import("./youtube.server");
     const youtubeId = extractYoutubeId(data.url);
     if (!youtubeId) throw new Error("That doesn't look like a YouTube URL.");
 
-    // dedupe per user
     const { data: existing } = await context.supabase
       .from("videos")
       .select("id")
@@ -47,15 +54,51 @@ export const ingestVideo = createServerFn({ method: "POST" })
 
     const oembed = await fetchOEmbed(youtubeId);
 
-    let segments;
-    try {
-      segments = await fetchTranscript(youtubeId);
-    } catch {
-      throw new Error(
-        "Couldn't fetch captions for this video. Captions may be disabled by the creator. (Audio transcription is on the roadmap.)",
-      );
+    // Step 1: try captions.
+    let segments = await fetchTranscript(youtubeId).catch(() => []);
+
+    // Step 2: fall back to audio transcription via Lovable AI.
+    if (!segments.length) {
+      const lovableKey = process.env.LOVABLE_API_KEY;
+      if (!lovableKey) {
+        throw new Error(
+          "Couldn't fetch captions for this video, and audio transcription is not configured.",
+        );
+      }
+      try {
+        const stream = await resolveAudioStream(youtubeId);
+        const blob = await fetchAudioBlob(stream);
+        const text = await transcribeAudio(blob, stream.mime, lovableKey);
+        if (!text) throw new Error("EMPTY_TRANSCRIPT");
+        segments = textToSyntheticSegments(text, stream.durationSeconds);
+      } catch (e) {
+        const code = e instanceof Error ? e.message : String(e);
+        if (code === "TOO_LONG" || code === "AUDIO_TOO_LARGE") {
+          throw new Error(
+            "This video is too long for audio transcription (limit ~60 minutes). Try a shorter video.",
+          );
+        }
+        if (code === "LIVE_STREAM") {
+          throw new Error("Live streams aren't supported.");
+        }
+        if (code === "ACCESS_DENIED" || code === "NO_AUDIO_STREAM" || code === "AUDIO_FETCH_FAILED") {
+          throw new Error(
+            "Couldn't access this video's audio. It may be private, members-only, age-restricted, or region-blocked.",
+          );
+        }
+        if (code === "AI_CREDITS_EXHAUSTED") {
+          throw new Error("AI credits exhausted. Please add credits to continue.");
+        }
+        if (code === "AI_RATE_LIMITED") {
+          throw new Error("AI rate limit hit. Please try again in a minute.");
+        }
+        throw new Error(
+          "Couldn't get a transcript for this video (no captions and audio transcription failed).",
+        );
+      }
     }
-    if (!segments.length) throw new Error("This video has no captions available.");
+
+    if (!segments.length) throw new Error("This video has no usable transcript.");
 
     const rawText = segmentsToRawText(segments);
 
