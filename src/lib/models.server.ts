@@ -1,27 +1,32 @@
 import { generateText, type LanguageModel } from "ai";
 
 export type AiModels = {
-  /** Fast, cheap model for cleaning, concept maps, expansions. */
   fast: LanguageModel;
-  /** Deep reasoning model for academic notes and AP-framework analysis. */
   deep: LanguageModel;
-  /** Human-readable name of the active provider, for logs/diagnostics. */
   provider: "gemini" | "lovable";
 };
 
-/**
- * Resolve the AI models used across the app.
- *
- * Primary backend is Gemini accessed directly via `GEMINI_API_KEY`, which lets
- * us lean on Gemini's long context window. When that key is absent (e.g. the
- * Lovable-hosted deployment) we fall back to the Lovable AI gateway, which also
- * proxies Gemini models.
- */
+function getGeminiKeys(): string[] {
+  const keys: string[] = [];
+  const base = process.env.GEMINI_API_KEY?.trim();
+  if (base) keys.push(base);
+  for (let i = 1; i <= 9; i++) {
+    const key = process.env[`GEMINI_API_KEY_${i}`]?.trim();
+    if (key) keys.push(key);
+  }
+  return [...new Set(keys)];
+}
+
+function isQuotaError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /quota|rate.?limit|RESOURCE_EXHAUSTED|payment|invalid.?auth|credential|\b429\b|\b403\b/i.test(msg);
+}
+
 export async function getAiModels(): Promise<AiModels> {
-  const geminiKey = process.env.GEMINI_API_KEY?.trim();
-  if (geminiKey) {
+  const geminiKeys = getGeminiKeys();
+  if (geminiKeys.length > 0) {
     const { createGoogleGenerativeAI } = await import("@ai-sdk/google");
-    const google = createGoogleGenerativeAI({ apiKey: geminiKey });
+    const google = createGoogleGenerativeAI({ apiKey: geminiKeys[0] });
     return {
       fast: google("gemini-2.5-flash"),
       deep: google("gemini-2.5-pro"),
@@ -40,28 +45,72 @@ export async function getAiModels(): Promise<AiModels> {
     };
   }
 
-  throw new Error("No AI provider configured. Set GEMINI_API_KEY (preferred) or LOVABLE_API_KEY.");
+  throw new Error("No AI provider configured. Set GEMINI_API_KEY_1 through GEMINI_API_KEY_9.");
 }
 
-function isQuotaError(e: unknown): boolean {
-  const msg = e instanceof Error ? e.message : String(e);
-  return /quota|rate.?limit|RESOURCE_EXHAUSTED|\b429\b/i.test(msg);
+async function runWithKey(
+  modelName: "gemini-2.5-flash" | "gemini-2.5-pro",
+  apiKey: string,
+  prompt: string,
+): Promise<string> {
+  const { createGoogleGenerativeAI } = await import("@ai-sdk/google");
+  const google = createGoogleGenerativeAI({ apiKey });
+  const { text } = await generateText({ model: google(modelName), prompt });
+  return text;
+}
+
+async function runWithRotation(
+  modelName: "gemini-2.5-flash" | "gemini-2.5-pro",
+  prompt: string,
+): Promise<string> {
+  const keys = getGeminiKeys();
+  if (keys.length === 0) throw new Error("No Gemini API keys configured.");
+  let lastError: unknown;
+  for (let i = 0; i < keys.length; i++) {
+    try {
+      console.log(`[AI] Trying Gemini key ${i + 1}/${keys.length}`);
+      return await runWithKey(modelName, keys[i], prompt);
+    } catch (e) {
+      lastError = e;
+      if (isQuotaError(e)) {
+        console.warn(`[AI] Key ${i + 1} quota exceeded, rotating to next key...`);
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastError;
 }
 
 export type LayerGenerator = {
   provider: AiModels["provider"];
-  /** Generate with the fast model. */
   fast: (prompt: string) => Promise<string>;
-  /**
-   * Generate with the deep model, falling back to the fast model if the deep
-   * model is unavailable due to quota (e.g. free-tier Gemini keys have no
-   * `gemini-2.5-pro` quota).
-   */
   deep: (prompt: string) => Promise<string>;
 };
 
 export async function createLayerGenerator(): Promise<LayerGenerator> {
-  const { fast, deep, provider } = await getAiModels();
+  const { provider } = await getAiModels();
+  const geminiKeys = getGeminiKeys();
+
+  if (geminiKeys.length > 0) {
+    return {
+      provider,
+      fast: (prompt) => runWithRotation("gemini-2.5-flash", prompt),
+      deep: async (prompt) => {
+        try {
+          return await runWithRotation("gemini-2.5-pro", prompt);
+        } catch (e) {
+          if (isQuotaError(e)) {
+            console.warn("[AI] All keys exhausted for pro model, falling back to flash...");
+            return runWithRotation("gemini-2.5-flash", prompt);
+          }
+          throw e;
+        }
+      },
+    };
+  }
+
+  const { fast, deep } = await getAiModels();
   const run = (model: LanguageModel, prompt: string) =>
     generateText({ model, prompt }).then((r) => r.text);
   return {
@@ -71,7 +120,7 @@ export async function createLayerGenerator(): Promise<LayerGenerator> {
       try {
         return await run(deep, prompt);
       } catch (e) {
-        if (isQuotaError(e) && deep !== fast) return run(fast, prompt);
+        if (isQuotaError(e)) return run(fast, prompt);
         throw e;
       }
     },
