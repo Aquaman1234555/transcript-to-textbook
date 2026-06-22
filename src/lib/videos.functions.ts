@@ -36,10 +36,6 @@ export const ingestVideo = createServerFn({ method: "POST" })
       fetchOEmbed,
       fetchTranscript,
       segmentsToRawText,
-      resolveAudioStream,
-      fetchAudioBlob,
-      transcribeAudio,
-      textToSyntheticSegments,
     } = await import("./youtube.server");
     const youtubeId = extractYoutubeId(data.url);
     if (!youtubeId) throw new Error("That doesn't look like a YouTube URL.");
@@ -54,49 +50,25 @@ export const ingestVideo = createServerFn({ method: "POST" })
 
     const oembed = await fetchOEmbed(youtubeId);
 
-    // Step 1: try captions.
-    let segments = await fetchTranscript(youtubeId).catch(() => []);
-
-    // Step 2: fall back to audio transcription via Lovable AI.
-    if (!segments.length) {
-      const lovableKey = process.env.LOVABLE_API_KEY;
-      if (!lovableKey) {
+    // fetchTranscript tries: (1) caption scrape, (2) youtube-transcript lib,
+    // (3) Gemini native YouTube transcription — works for any public video.
+    let segments: Awaited<ReturnType<typeof fetchTranscript>> = [];
+    try {
+      segments = await fetchTranscript(youtubeId);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[ingestVideo] transcript failed:", msg);
+      if (/quota|rate.?limit|RESOURCE_EXHAUSTED|429/i.test(msg)) {
+        throw new Error("Transcription service is busy. Please try again in a minute.");
+      }
+      if (/private|members|age.?restrict|region|unavailable/i.test(msg)) {
         throw new Error(
-          "Couldn't fetch captions for this video, and audio transcription is not configured.",
+          "Couldn't access this video. It may be private, members-only, age-restricted, or region-blocked.",
         );
       }
-      try {
-        const stream = await resolveAudioStream(youtubeId);
-        const blob = await fetchAudioBlob(stream);
-        const text = await transcribeAudio(blob, stream.mime, lovableKey);
-        if (!text) throw new Error("EMPTY_TRANSCRIPT");
-        segments = textToSyntheticSegments(text, stream.durationSeconds);
-      } catch (e) {
-        const code = e instanceof Error ? e.message : String(e);
-        if (code === "TOO_LONG" || code === "AUDIO_TOO_LARGE") {
-          throw new Error(
-            "This video is too long for audio transcription (limit ~60 minutes). Try a shorter video.",
-          );
-        }
-        if (code === "LIVE_STREAM") {
-          throw new Error("Live streams aren't supported.");
-        }
-        if (code === "ACCESS_DENIED" || code === "NO_AUDIO_STREAM" || code === "AUDIO_FETCH_FAILED") {
-          throw new Error(
-            "Couldn't access this video's audio. It may be private, members-only, age-restricted, or region-blocked.",
-          );
-        }
-        if (code === "AI_CREDITS_EXHAUSTED") {
-          throw new Error("AI credits exhausted. Please add credits to continue.");
-        }
-        if (code === "AI_RATE_LIMITED") {
-          throw new Error("AI rate limit hit. Please try again in a minute.");
-        }
-        throw new Error(
-          "Couldn't get a transcript for this video (no captions and audio transcription failed).",
-        );
-      }
+      throw new Error("Couldn't transcribe this video. Please try a different one.");
     }
+
 
     if (!segments.length) throw new Error("This video has no usable transcript.");
 
