@@ -110,7 +110,7 @@ async function runWithProviderChain(prompt: string, useFast: boolean): Promise<s
     }
   }
   // 2️⃣ Try Groq (free)
-  if (process.env.GROQ_API_KEY?.trim()) {
+  if (getGroqKey()) {
     try {
       return await runGroq(prompt, useFast);
     } catch (e) {
