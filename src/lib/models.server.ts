@@ -7,14 +7,24 @@ export type AiModels = {
 // ─── Key Helpers ─────────────────────────────────────────────────────────────
 function getGeminiKeys(): string[] {
   const keys: string[] = [];
-  const base = process.env.GEMINI_API_KEY?.trim();
-  if (base) keys.push(base);
-  for (let i = 1; i <= 9; i++) {
-    const key = process.env[`GEMINI_API_KEY_${i}`]?.trim();
-    if (key) keys.push(key);
+  // Accept GEMINI_API_KEY, GEMINI_API_KEY_1..9, and any GEMINI*_API_KEY
+  // variant (GEMINII_API_KEY, GEMINIII_API_KEY, ...).
+  for (const [name, value] of Object.entries(process.env)) {
+    if (!value) continue;
+    if (/^GEMINI[I]*_API_KEY(_\d+)?$/i.test(name)) {
+      const v = value.trim();
+      if (v) keys.push(v);
+    }
   }
   return [...new Set(keys)];
 }
+function getGroqKey(): string | undefined {
+  for (const [name, value] of Object.entries(process.env)) {
+    if (/^GROQ_API_KEY$/i.test(name) && value?.trim()) return value.trim();
+  }
+  return undefined;
+}
+
 function isQuotaError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e);
   return /quota|rate.?limit|RESOURCE_EXHAUSTED|payment|invalid.?auth|credential|\b429\b|\b403\b/i.test(msg);
