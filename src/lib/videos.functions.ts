@@ -230,7 +230,7 @@ export const generateForVideo = createServerFn({ method: "POST" })
       const [cleanMd, conceptMap, apAnalysis, knowledgeExpansion] = await Promise.all([
         ai.fast(CLEAN_TRANSCRIPT_PROMPT.replace("{TRANSCRIPT}", rawCapped)),
         ai.fast(CONCEPT_MAP_PROMPT.replace("{NOTES}", notesMd)),
-        ai.fast(
+        ai.deep(
           AP_ANALYSIS_PROMPT.replace("{FRAMEWORK}", AP_FRAMEWORK_KNOWLEDGE).replace(
             "{NOTES}",
             notesMd,
