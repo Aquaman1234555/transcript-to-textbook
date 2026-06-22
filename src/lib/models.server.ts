@@ -63,7 +63,7 @@ async function runGeminiWithRotation(
 }
 // ─── Groq Runner (FREE - 6000 req/day) ───────────────────────────────────────
 async function runGroq(prompt: string, useFast: boolean): Promise<string> {
-  const groqKey = process.env.GROQ_API_KEY?.trim();
+  const groqKey = getGroqKey();
   if (!groqKey) throw new Error("No GROQ_API_KEY configured.");
   const { createOpenAICompatible } = await import("@ai-sdk/openai-compatible");
   const groq = createOpenAICompatible({
