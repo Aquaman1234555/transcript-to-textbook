@@ -216,26 +216,21 @@ export const generateForVideo = createServerFn({ method: "POST" })
     const rawCapped = transcript.raw_text.slice(0, 500_000);
 
     try {
-      // Layer 1: clean transcript.
-      const cleanMd = await ai.fast(CLEAN_TRANSCRIPT_PROMPT.replace("{TRANSCRIPT}", rawCapped));
-      await context.supabase
-        .from("transcripts")
-        .update({ clean_markdown: cleanMd })
-        .eq("video_id", video.id);
-
-      // Layer 2: detailed academic notes (prefer the clean transcript).
-      const notesSource = cleanMd.length > 0 ? cleanMd : rawCapped;
-      const notesMd = await ai.deep(NOTES_PROMPT.replace("{TRANSCRIPT}", notesSource));
+      // Skip the separate "clean transcript" pre-pass — it doubled latency
+      // for no real quality gain. Feed the raw transcript straight to the
+      // notes generator; Gemini handles punctuation/translation inline.
+      // Then run every derived layer in parallel on the fast model.
+      const notesMd = await ai.fast(NOTES_PROMPT.replace("{TRANSCRIPT}", rawCapped));
 
       await context.supabase
         .from("notes")
         .update({ notes_markdown: notesMd })
         .eq("video_id", video.id);
 
-      // Layers 3-5 derive from the notes and are independent of each other.
-      const [conceptMap, apAnalysis, knowledgeExpansion] = await Promise.all([
+      const [cleanMd, conceptMap, apAnalysis, knowledgeExpansion] = await Promise.all([
+        ai.fast(CLEAN_TRANSCRIPT_PROMPT.replace("{TRANSCRIPT}", rawCapped)),
         ai.fast(CONCEPT_MAP_PROMPT.replace("{NOTES}", notesMd)),
-        ai.deep(
+        ai.fast(
           AP_ANALYSIS_PROMPT.replace("{FRAMEWORK}", AP_FRAMEWORK_KNOWLEDGE).replace(
             "{NOTES}",
             notesMd,
@@ -244,14 +239,20 @@ export const generateForVideo = createServerFn({ method: "POST" })
         ai.fast(KNOWLEDGE_EXPANSION_PROMPT.replace("{NOTES}", notesMd)),
       ]);
 
-      await context.supabase
-        .from("notes")
-        .update({
-          concept_map_markdown: conceptMap,
-          ap_analysis_markdown: apAnalysis,
-          knowledge_expansion_markdown: knowledgeExpansion,
-        })
-        .eq("video_id", video.id);
+      await Promise.all([
+        context.supabase
+          .from("transcripts")
+          .update({ clean_markdown: cleanMd })
+          .eq("video_id", video.id),
+        context.supabase
+          .from("notes")
+          .update({
+            concept_map_markdown: conceptMap,
+            ap_analysis_markdown: apAnalysis,
+            knowledge_expansion_markdown: knowledgeExpansion,
+          })
+          .eq("video_id", video.id),
+      ]);
 
       await context.supabase
         .from("videos")
