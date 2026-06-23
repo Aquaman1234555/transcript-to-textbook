@@ -30,6 +30,13 @@ function isQuotaError(e: unknown): boolean {
   return /quota|rate.?limit|RESOURCE_EXHAUSTED|payment|invalid.?auth|credential|\b429\b|\b403\b/i.test(msg);
 }
 // ─── Gemini Runner ────────────────────────────────────────────────────────────
+function isTransientError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /\b(500|502|503|504)\b|ETIMEDOUT|ECONNRESET|fetch failed|network|timeout|unavailable|overloaded/i.test(
+    msg,
+  );
+}
+
 async function runGemini(
   modelName: "gemini-2.5-flash" | "gemini-2.5-pro",
   apiKey: string,
@@ -37,8 +44,20 @@ async function runGemini(
 ): Promise<string> {
   const { createGoogleGenerativeAI } = await import("@ai-sdk/google");
   const google = createGoogleGenerativeAI({ apiKey });
-  const { text } = await generateText({ model: google(modelName), prompt });
-  return text;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const { text } = await generateText({ model: google(modelName), prompt });
+      return text;
+    } catch (e) {
+      lastErr = e;
+      if (!isTransientError(e) || attempt === 2) throw e;
+      const wait = 500 * 2 ** attempt + Math.random() * 250;
+      console.warn(`[AI] Gemini transient error, retry ${attempt + 1}/3 in ${Math.round(wait)}ms`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
 }
 async function runGeminiWithRotation(
   modelName: "gemini-2.5-flash" | "gemini-2.5-pro",
