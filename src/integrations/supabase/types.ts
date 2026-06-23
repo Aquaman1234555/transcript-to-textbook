@@ -123,6 +123,7 @@ export type Database = {
           duration_seconds: number | null
           error: string | null
           id: string
+          progress: string | null
           status: string
           thumbnail_url: string | null
           title: string | null
@@ -137,6 +138,7 @@ export type Database = {
           duration_seconds?: number | null
           error?: string | null
           id?: string
+          progress?: string | null
           status?: string
           thumbnail_url?: string | null
           title?: string | null
@@ -151,6 +153,7 @@ export type Database = {
           duration_seconds?: number | null
           error?: string | null
           id?: string
+          progress?: string | null
           status?: string
           thumbnail_url?: string | null
           title?: string | null

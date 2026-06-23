@@ -28,7 +28,7 @@ function VideoPage() {
     queryFn: () => getV({ data: { videoId } }),
     refetchInterval: (q) => {
       const status = q.state.data?.video?.status;
-      return status === "pending" ? 3000 : false;
+      return status === "pending" ? 1500 : false;
     },
   });
 
@@ -117,7 +117,8 @@ function VideoPage() {
             </Button>
             {isGenerating && (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-1 text-xs text-amber-500">
-                <Loader2 className="size-3 animate-spin" /> Generating notes…
+                <Loader2 className="size-3 animate-spin" />
+                {video.progress ?? "Generating notes…"}
               </span>
             )}
             {video.status === "failed" && video.error && (
