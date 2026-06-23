@@ -117,7 +117,8 @@ function VideoPage() {
             </Button>
             {isGenerating && (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-1 text-xs text-amber-500">
-                <Loader2 className="size-3 animate-spin" /> Generating notes…
+                <Loader2 className="size-3 animate-spin" />
+                {video.progress ?? "Generating notes…"}
               </span>
             )}
             {video.status === "failed" && video.error && (
