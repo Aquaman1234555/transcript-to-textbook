@@ -28,7 +28,7 @@ function VideoPage() {
     queryFn: () => getV({ data: { videoId } }),
     refetchInterval: (q) => {
       const status = q.state.data?.video?.status;
-      return status === "pending" ? 3000 : false;
+      return status === "pending" ? 1500 : false;
     },
   });
 
