@@ -207,6 +207,107 @@ async function transcribeViaGeminiWithRotation(youtubeId: string): Promise<Trans
   throw lastError;
 }
 
+// ─── Groq Whisper fallback (audio download → STT) ─────────────────────────────
+function getGroqKey(): string | undefined {
+  for (const [name, value] of Object.entries(process.env)) {
+    if (/^GROQ_API_KEY$/i.test(name) && value?.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+// Public Piped instances that expose a JSON streams API with direct audio URLs.
+// We try them in order — if one is down we move on.
+const PIPED_INSTANCES = [
+  "https://pipedapi.kavin.rocks",
+  "https://pipedapi.adminforge.de",
+  "https://api.piped.private.coffee",
+  "https://pipedapi.r4fo.com",
+];
+
+type PipedAudioStream = { url: string; mimeType?: string; bitrate?: number };
+type PipedStreams = { audioStreams?: PipedAudioStream[] };
+
+async function fetchAudioUrl(youtubeId: string): Promise<string | null> {
+  for (const base of PIPED_INSTANCES) {
+    try {
+      const r = await fetch(`${base}/streams/${youtubeId}`, {
+        headers: { "User-Agent": UA, Accept: "application/json" },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!r.ok) continue;
+      const data = (await r.json()) as PipedStreams;
+      const streams = (data.audioStreams ?? []).filter((s) => s.url);
+      if (!streams.length) continue;
+      // Pick the lowest-bitrate audio stream → smaller file, faster STT.
+      streams.sort((a, b) => (a.bitrate ?? 1e9) - (b.bitrate ?? 1e9));
+      return streams[0].url;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+async function transcribeViaGroqWhisper(youtubeId: string): Promise<TranscriptSegment[]> {
+  const groqKey = getGroqKey();
+  if (!groqKey) throw new Error("No GROQ_API_KEY configured for Whisper fallback.");
+
+  const audioUrl = await fetchAudioUrl(youtubeId);
+  if (!audioUrl) throw new Error("Couldn't locate an audio stream for this video.");
+
+  console.log(`[Transcript] Downloading audio for Whisper STT...`);
+  const audioRes = await fetch(audioUrl, { signal: AbortSignal.timeout(45_000) });
+  if (!audioRes.ok) throw new Error(`Audio download failed: ${audioRes.status}`);
+
+  // Groq Whisper hard limit is 25MB. Bail out before buffering more.
+  const contentLength = Number(audioRes.headers.get("content-length") ?? 0);
+  if (contentLength > 24 * 1024 * 1024) {
+    throw new Error("This video's audio is too large for Whisper transcription.");
+  }
+  const audioBlob = await audioRes.blob();
+  if (audioBlob.size > 24 * 1024 * 1024) {
+    throw new Error("This video's audio is too large for Whisper transcription.");
+  }
+
+  const form = new FormData();
+  form.append("file", audioBlob, "audio.m4a");
+  form.append("model", "whisper-large-v3-turbo");
+  form.append("response_format", "verbose_json");
+  form.append("temperature", "0");
+
+  console.log(`[Transcript] Sending ${(audioBlob.size / 1024 / 1024).toFixed(1)}MB to Groq Whisper...`);
+  const stt = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${groqKey}` },
+    body: form,
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!stt.ok) {
+    const errBody = await stt.text();
+    throw new Error(`Groq Whisper error ${stt.status}: ${errBody.slice(0, 200)}`);
+  }
+
+  const data = (await stt.json()) as {
+    text?: string;
+    segments?: Array<{ start?: number; end?: number; text?: string }>;
+  };
+
+  if (data.segments?.length) {
+    return data.segments
+      .map((s) => ({
+        offset: s.start ?? 0,
+        duration: (s.end ?? 0) - (s.start ?? 0),
+        text: (s.text ?? "").trim(),
+      }))
+      .filter((s) => s.text);
+  }
+  // Fallback: single big segment.
+  if (data.text?.trim()) {
+    return [{ offset: 0, duration: 0, text: data.text.trim() }];
+  }
+  throw new Error("Groq Whisper returned an empty transcript.");
+}
+
 // ─── Main fetchTranscript ──────────────────────────────────────────────────────
 
 export async function fetchTranscript(youtubeId: string): Promise<TranscriptSegment[]> {
@@ -240,11 +341,17 @@ export async function fetchTranscript(youtubeId: string): Promise<TranscriptSegm
     // fall through
   }
 
-  // ── Step 3: Gemini native YouTube transcription (no captions needed!) ──────
-  // Gemini can watch any public YouTube video and generate a full transcript.
-  // This is a single lightweight HTTP request — no audio downloading required.
-  console.log(`[Transcript] No captions found. Using Gemini AI to transcribe video ${youtubeId}...`);
-  return await transcribeViaGeminiWithRotation(youtubeId);
+  // ── Step 3: Gemini native YouTube transcription (no captions needed) ───────
+  try {
+    const segs = await transcribeViaGeminiWithRotation(youtubeId);
+    if (segs.length) return segs;
+  } catch (e) {
+    console.warn(`[Transcript] Gemini transcription failed: ${e instanceof Error ? e.message : e}`);
+  }
+
+  // ── Step 4: Groq Whisper STT on the raw audio (final fallback) ─────────────
+  console.log(`[Transcript] Falling back to Groq Whisper for ${youtubeId}...`);
+  return await transcribeViaGroqWhisper(youtubeId);
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
