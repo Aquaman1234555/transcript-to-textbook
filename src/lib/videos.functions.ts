@@ -200,10 +200,14 @@ export const generateForVideo = createServerFn({ method: "POST" })
       .eq("user_id", context.userId)
       .single();
     if (vErr || !video) throw new Error("Video not found");
-    await context.supabase
-      .from("videos")
-      .update({ status: "pending", error: null })
-      .eq("id", video.id);
+
+    const setProgress = (progress: string) =>
+      context.supabase
+        .from("videos")
+        .update({ status: "pending", error: null, progress })
+        .eq("id", video.id);
+
+    await setProgress("Preparing transcript…");
 
     const { data: transcript } = await context.supabase
       .from("transcripts")
@@ -212,20 +216,18 @@ export const generateForVideo = createServerFn({ method: "POST" })
       .single();
     if (!transcript?.raw_text) throw new Error("No transcript to process");
 
-    // Gemini has a very large context window, so we can feed long transcripts.
     const rawCapped = transcript.raw_text.slice(0, 500_000);
 
     try {
-      // Skip the separate "clean transcript" pre-pass — it doubled latency
-      // for no real quality gain. Feed the raw transcript straight to the
-      // notes generator; Gemini handles punctuation/translation inline.
-      // Then run every derived layer in parallel on the fast model.
+      await setProgress("Generating textbook notes…");
       const notesMd = await ai.fast(NOTES_PROMPT.replace("{TRANSCRIPT}", rawCapped));
 
       await context.supabase
         .from("notes")
         .update({ notes_markdown: notesMd })
         .eq("video_id", video.id);
+
+      await setProgress("Building concept map, AP analysis & extras…");
 
       const [cleanMd, conceptMap, apAnalysis, knowledgeExpansion] = await Promise.all([
         ai.fast(CLEAN_TRANSCRIPT_PROMPT.replace("{TRANSCRIPT}", rawCapped)),
@@ -256,15 +258,16 @@ export const generateForVideo = createServerFn({ method: "POST" })
 
       await context.supabase
         .from("videos")
-        .update({ status: "ready", error: null })
+        .update({ status: "ready", error: null, progress: null })
         .eq("id", video.id);
 
       return { ok: true };
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Generation failed";
+      console.error("[generateForVideo] failed:", msg);
       await context.supabase
         .from("videos")
-        .update({ status: "failed", error: msg })
+        .update({ status: "failed", error: msg, progress: null })
         .eq("id", video.id);
       throw e;
     }
